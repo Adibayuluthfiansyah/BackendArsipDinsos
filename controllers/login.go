@@ -58,6 +58,7 @@ func Login(c *gin.Context) {
 
 	claims := jwt.MapClaims{
 		"user_id": user.ID,
+		"role":    user.Role, // ✅ Tambahkan role
 		"exp":     time.Now().Add(24 * time.Hour).Unix(),
 	}
 
@@ -81,7 +82,13 @@ func Login(c *gin.Context) {
 
 	// Kirim response ke frontend
 	c.JSON(http.StatusOK, gin.H{
-		"message":  "Login berhasil",
-		"token_id": secretToken.ID,
+		"message": "Login berhasil",
+		"token":   signedToken,
+		"user": gin.H{
+			"id":       user.ID,
+			"name":     user.Name,
+			"username": user.Username,
+			"role":     user.Role,
+		},
 	})
 }

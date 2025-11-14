@@ -7,8 +7,8 @@ import (
 )
 
 func LogoutRoutes(r *gin.Engine) {
-	api := r.Group("/api")
+	api := r.Group("/api/auth")
 	{
-		api.POST("/logout", controllers.Logout)
+		api.POST("/logout", controllers.Logout) // → /api/auth/logout
 	}
 }

@@ -7,12 +7,13 @@ import (
 )
 
 func DocumentRoutes(r *gin.Engine) {
-	api := r.Group("/api/documents")
+	api := r.Group("/api")
 	{
-		api.POST("/", controllers.CreateDocument)
-		api.GET("/", controllers.GetDocuments)
-		api.GET("/:id", controllers.GetDocumentByID)
-		api.PUT("/:id", controllers.UpdateDocument)
-		api.DELETE("/:id", controllers.DeleteDocument)
+		// ✅ Tanpa trailing slash
+		api.POST("/documents", controllers.CreateDocument)       // → /api/documents
+		api.GET("/documents", controllers.GetDocuments)          // → /api/documents
+		api.GET("/documents/:id", controllers.GetDocumentByID)   // → /api/documents/:id
+		api.PUT("/documents/:id", controllers.UpdateDocument)    // → /api/documents/:id
+		api.DELETE("/documents/:id", controllers.DeleteDocument) // → /api/documents/:id
 	}
 }
