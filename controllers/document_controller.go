@@ -15,10 +15,28 @@ import (
 // CREATE DOCUMENT (Cloudinary Integration)
 // =======================
 func CreateDocument(c *gin.Context) {
+	// ✅ AMBIL USER ID DARI CONTEXT
+	userIDInterface, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "User tidak terautentikasi"})
+		return
+	}
+	userID := userIDInterface.(string)
+
 	sender := c.PostForm("sender")
 	subject := c.PostForm("subject")
 	letterType := c.PostForm("letter_type")
-	userID := c.PostForm("user_id")
+
+	// Validasi input
+	if sender == "" || subject == "" || letterType == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Sender, subject, dan letter_type wajib diisi"})
+		return
+	}
+
+	if letterType != "masuk" && letterType != "keluar" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Letter type harus 'masuk' atau 'keluar'"})
+		return
+	}
 
 	// Ambil file dari form
 	file, err := c.FormFile("file")
@@ -46,6 +64,9 @@ func CreateDocument(c *gin.Context) {
 	case ".jpg", ".jpeg", ".png", ".gif", ".webp":
 		resourceType = "image"
 		folder = "gambar"
+	case ".pdf":
+		resourceType = "raw"
+		folder = "dokumen"
 	}
 
 	// ======================
@@ -62,19 +83,19 @@ func CreateDocument(c *gin.Context) {
 	// ======================
 	document := models.Document{
 		Sender:     sender,
-		FileName:   fileURL, // simpan URL hasil upload, bukan nama file lokal
+		FileName:   fileURL,
 		Subject:    subject,
 		LetterType: letterType,
-	}
-
-	if userID != "" {
-		document.UserID = &userID
+		UserID:     &userID,
 	}
 
 	if err := config.DB.Create(&document).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Gagal menyimpan dokumen: " + err.Error()})
 		return
 	}
+
+	// Buat notifikasi untuk user lain (async)
+	go createNotificationForOtherUsers(document.UserID, document.ID, document.Subject)
 
 	c.JSON(http.StatusOK, gin.H{
 		"message":   "Dokumen berhasil diupload dan disimpan",
@@ -83,6 +104,40 @@ func CreateDocument(c *gin.Context) {
 		"file_type": resourceType,
 		"document":  document,
 	})
+
+}
+
+// ======================
+// BUAT NOTIFIKASI UNTUK USER LAIN
+// ======================
+func createNotificationForOtherUsers(uploaderID *string, documentID string, documentSubject string) {
+	if uploaderID == nil {
+		return
+	}
+
+	var users []models.User
+	// Ambil semua user KECUALI user yang mengupload
+	if err := config.DB.Where("id <> ?", *uploaderID).Find(&users).Error; err != nil {
+		return
+	}
+
+	message := "Dokumen baru ditambahkan: " + documentSubject
+	link := "/dashboard/documents/" + documentID
+
+	successCount := 0
+	for _, user := range users {
+		notification := models.Notification{
+			UserID:  user.ID,
+			Message: message,
+			Link:    link,
+			IsRead:  false,
+		}
+		if err := config.DB.Create(&notification).Error; err != nil {
+		} else {
+			successCount++
+		}
+	}
+
 }
 
 // =======================
@@ -99,6 +154,11 @@ func GetDocuments(c *gin.Context) {
 	// Bentuk respons agar menampilkan nama user dengan jelas
 	var response []gin.H
 	for _, doc := range documents {
+		userName := ""
+		if doc.User.ID != "" {
+			userName = doc.User.Name
+		}
+
 		response = append(response, gin.H{
 			"id":          doc.ID,
 			"sender":      doc.Sender,
@@ -106,13 +166,14 @@ func GetDocuments(c *gin.Context) {
 			"subject":     doc.Subject,
 			"letter_type": doc.LetterType,
 			"user_id":     doc.UserID,
-			"user_name":   doc.User.Name, // ambil nama user dari relasi
+			"user_name":   userName,
 			"created_at":  doc.CreatedAt,
 		})
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"documents": response,
+		"total":     len(documents),
 	})
 }
 
@@ -128,6 +189,11 @@ func GetDocumentByID(c *gin.Context) {
 		return
 	}
 
+	userName := ""
+	if document.User.ID != "" {
+		userName = document.User.Name
+	}
+
 	response := gin.H{
 		"id":          document.ID,
 		"sender":      document.Sender,
@@ -135,7 +201,7 @@ func GetDocumentByID(c *gin.Context) {
 		"subject":     document.Subject,
 		"letter_type": document.LetterType,
 		"user_id":     document.UserID,
-		"user_name":   document.User.Name, // tampilkan nama uploader
+		"user_name":   userName,
 		"created_at":  document.CreatedAt,
 	}
 
@@ -149,7 +215,7 @@ func UpdateDocument(c *gin.Context) {
 	id := c.Param("id")
 	var document models.Document
 
-	if err := config.DB.First(&document, id).Error; err != nil {
+	if err := config.DB.First(&document, "id = ?", id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Dokumen tidak ditemukan"})
 		return
 	}
@@ -161,10 +227,8 @@ func UpdateDocument(c *gin.Context) {
 	}
 
 	document.Sender = updatedData.Sender
-	document.FileName = updatedData.FileName
 	document.Subject = updatedData.Subject
 	document.LetterType = updatedData.LetterType
-	document.UserID = updatedData.UserID
 
 	if err := config.DB.Save(&document).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Gagal memperbarui dokumen: " + err.Error()})
@@ -184,7 +248,6 @@ func DeleteDocument(c *gin.Context) {
 	id := c.Param("id")
 	var document models.Document
 
-	// gunakan "id = ?" agar cocok dengan UUID (string)
 	if err := config.DB.First(&document, "id = ?", id).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Dokumen tidak ditemukan"})
 		return
